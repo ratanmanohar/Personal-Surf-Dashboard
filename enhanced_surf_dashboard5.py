@@ -1,0 +1,1187 @@
+import streamlit as st
+import requests
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.figure_factory as ff
+from datetime import datetime, timedelta
+import math
+
+# Page configuration
+st.set_page_config(
+    page_title="San Diego Surf Dashboard",
+    page_icon="🏄‍♂️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Enhanced San Diego surf spots with detailed characteristics
+SD_SURF_SPOTS = {
+    'Ocean Beach': {
+        'lat': 32.7533, 'lon': -117.2564,
+        'break_type': 'Beach Break',
+        'skill_level': 'Medium',
+        'ideal_boards': ['Shortboard', 'Funboard'],
+        'description': 'Powerful beach break with consistent waves',
+        'tide_station': '9410170',
+        'best_tide': 'Mid-High',
+        'hazards': ['Strong currents', 'Rocks'],
+        'parking': 'Street parking',
+        'crowd_factor': 8
+    },
+    'Mission Beach': {
+        'lat': 32.7767, 'lon': -117.2533,
+        'break_type': 'Beach Break',
+        'skill_level': 'Low',
+        'ideal_boards': ['Longboard', 'Funboard'],
+        'description': 'Gentle beach break, great for beginners',
+        'tide_station': '9410170',
+        'best_tide': 'All tides',
+        'hazards': ['Crowds'],
+        'parking': 'Paid lots',
+        'crowd_factor': 9
+    },
+    'Pacific Beach': {
+        'lat': 32.7964, 'lon': -117.2581,
+        'break_type': 'Beach Break',
+        'skill_level': 'Medium',
+        'ideal_boards': ['Shortboard', 'Funboard'],
+        'description': 'Popular beach break with varied conditions',
+        'tide_station': '9410170',
+        'best_tide': 'Mid',
+        'hazards': ['Crowds', 'Pier'],
+        'parking': 'Street + paid',
+        'crowd_factor': 9
+    },
+    'La Jolla Shores': {
+        'lat': 32.8328, 'lon': -117.2713,
+        'break_type': 'Beach Break',
+        'skill_level': 'Low',
+        'ideal_boards': ['Longboard', 'SUP'],
+        'description': 'Protected cove, perfect for learning',
+        'tide_station': '9410230',
+        'best_tide': 'High',
+        'hazards': ['Marine life'],
+        'parking': 'Paid lots',
+        'crowd_factor': 7
+    },
+    'Blacks Beach': {
+        'lat': 32.8894, 'lon': -117.2519,
+        'break_type': 'Beach Break',
+        'skill_level': 'High',
+        'ideal_boards': ['Shortboard', 'Gun'],
+        'description': 'Powerful waves, advanced surfers only',
+        'tide_station': '9410230',
+        'best_tide': 'Mid-Low',
+        'hazards': ['Strong currents', 'Rocks', 'Remote location'],
+        'parking': 'Difficult hike',
+        'crowd_factor': 4
+    },
+    'Swamis': {
+        'lat': 33.0364, 'lon': -117.2956,
+        'break_type': 'Point Break',
+        'skill_level': 'Medium',
+        'ideal_boards': ['Longboard', 'Funboard'],
+        'description': 'Classic point break with long rides',
+        'tide_station': '9410580',
+        'best_tide': 'Mid-High',
+        'hazards': ['Rocks', 'Localism'],
+        'parking': 'Limited street',
+        'crowd_factor': 8
+    },
+    'Cardiff Reef': {
+        'lat': 33.0139, 'lon': -117.2806,
+        'break_type': 'Reef Break',
+        'skill_level': 'High',
+        'ideal_boards': ['Shortboard', 'Funboard'],
+        'description': 'Consistent reef break with quality waves',
+        'tide_station': '9410580',
+        'best_tide': 'Mid',
+        'hazards': ['Shallow reef', 'Sea urchins'],
+        'parking': 'Beach lot',
+        'crowd_factor': 6
+    },
+    'Windansea': {
+        'lat': 32.8167, 'lon': -117.2783,
+        'break_type': 'Reef Break',
+        'skill_level': 'High',
+        'ideal_boards': ['Shortboard'],
+        'description': 'Powerful reef break with hollow waves',
+        'tide_station': '9410230',
+        'best_tide': 'Low-Mid',
+        'hazards': ['Sharp reef', 'Strong currents', 'Localism'],
+        'parking': 'Street parking',
+        'crowd_factor': 7
+    }
+}
+
+class EnhancedSurfDashboard:
+    def __init__(self):
+        self.marine_api_url = "https://marine-api.open-meteo.com/v1/marine"
+        self.weather_api_url = "https://api.open-meteo.com/v1/forecast"
+        self.noaa_tides_url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+        
+    @st.cache_data(ttl=300)
+    def get_marine_data(_self, lat, lon):
+        """Get marine data using correct Marine API parameters"""
+        try:
+            params = {
+                'latitude': lat,
+                'longitude': lon,
+                'hourly': [
+                    'wave_height', 'wave_direction', 'wave_period',
+                    'wind_wave_height', 'swell_wave_height', 'swell_wave_direction',
+                    'swell_wave_period'
+                ],
+                'daily': [
+                    'wave_height_max', 'wave_direction_dominant', 
+                    'wave_period_max'
+                ],
+                'timezone': 'America/Los_Angeles',
+                'forecast_days': 7
+            }
+            
+            response = requests.get(_self.marine_api_url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                st.error(f"Marine API Error {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            st.error(f"Error fetching marine data: {e}")
+        return None
+    
+    @st.cache_data(ttl=300)
+    def get_weather_data(_self, lat, lon):
+        """Get weather data (including wind) using Weather API"""
+        try:
+            params = {
+                'latitude': lat,
+                'longitude': lon,
+                'hourly': [
+                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
+                    'temperature_2m', 'visibility'
+                ],
+                'daily': [
+                    'wind_speed_10m_max', 'wind_direction_10m_dominant',
+                    'temperature_2m_max', 'temperature_2m_min'
+                ],
+                'timezone': 'America/Los_Angeles',
+                'forecast_days': 7
+            }
+            
+            response = requests.get(_self.weather_api_url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                return response.json()
+                
+        except Exception as e:
+            st.error(f"Error fetching weather data: {e}")
+        return None
+    
+    @st.cache_data(ttl=1800)
+    def get_tide_data(_self, station_id):
+        """Get tide predictions from NOAA"""
+        try:
+            today = datetime.now()
+            end_date = today + timedelta(days=2)
+            
+            params = {
+                'station': station_id,
+                'product': 'predictions',
+                'begin_date': today.strftime('%Y%m%d'),
+                'end_date': end_date.strftime('%Y%m%d'),
+                'datum': 'MLLW',
+                'units': 'english',
+                'time_zone': 'lst_ldt',
+                'format': 'json'
+            }
+            
+            response = requests.get(_self.noaa_tides_url, params=params, timeout=15)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            st.warning(f"Tide data unavailable: {e}")
+        return None
+    
+    def combine_marine_weather_data(self, marine_data, weather_data):
+        """Combine marine and weather data into one structure"""
+        if not marine_data:
+            return None
+            
+        combined_data = marine_data.copy()
+        
+        if weather_data and 'hourly' in weather_data:
+            if 'hourly' not in combined_data:
+                combined_data['hourly'] = {}
+            
+            for key in ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'temperature_2m', 'visibility']:
+                if key in weather_data['hourly']:
+                    combined_data['hourly'][key] = weather_data['hourly'][key]
+        
+        return combined_data
+    
+    def calculate_surf_score(self, combined_data, user_prefs, spot_info):
+        """FIXED: Calculate surf score with proper bounds (0-100)"""
+        if not combined_data or 'hourly' not in combined_data:
+            return 0
+        
+        try:
+            current_wave_height = combined_data['hourly'].get('wave_height', [0])[0] or 0
+            current_wind_speed = combined_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+            current_period = combined_data['hourly'].get('wave_period', [8])[0] or 8
+            
+            score = 0
+            max_possible = 100
+            
+            # Wave height scoring (40 points max)
+            wave_score = 0
+            if user_prefs['skill_level'] == 'Low':
+                if 1 <= current_wave_height <= 3:
+                    wave_score = 40
+                elif 0.5 <= current_wave_height < 1:
+                    wave_score = 25
+                elif 3 < current_wave_height <= 5:
+                    wave_score = 15
+                else:
+                    wave_score = 5
+            elif user_prefs['skill_level'] == 'Medium':
+                if 2 <= current_wave_height <= 6:
+                    wave_score = 40
+                elif 1 <= current_wave_height < 2:
+                    wave_score = 25
+                elif 6 < current_wave_height <= 8:
+                    wave_score = 30
+                else:
+                    wave_score = 10
+            else:  # High skill
+                if 4 <= current_wave_height <= 12:
+                    wave_score = 40
+                elif 2 <= current_wave_height < 4:
+                    wave_score = 25
+                elif current_wave_height > 12:
+                    wave_score = 35
+                else:
+                    wave_score = 10
+            
+            score += wave_score
+            
+            # Wind scoring (25 points max)
+            wind_score = 0
+            if current_wind_speed < 8:
+                wind_score = 25
+            elif current_wind_speed < 12:
+                wind_score = 20
+            elif current_wind_speed < 18:
+                wind_score = 10
+            else:
+                wind_score = 0
+            
+            score += wind_score
+            
+            # Wave period scoring (20 points max)
+            period_score = 0
+            if current_period >= 12:
+                period_score = 20
+            elif current_period >= 8:
+                period_score = 15
+            elif current_period >= 6:
+                period_score = 10
+            else:
+                period_score = 5
+            
+            score += period_score
+            
+            # Spot characteristics (15 points max)
+            spot_score = 0
+            if user_prefs['skill_level'] == spot_info['skill_level']:
+                spot_score += 8
+            if user_prefs['board_length'] in spot_info['ideal_boards']:
+                spot_score += 7
+            
+            score += spot_score
+            
+            return min(max(score, 0), 100)  # Ensure score is between 0-100
+            
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 0
+    
+    def create_interactive_map(self, spots_data, user_prefs):
+        """Create interactive map with surf conditions"""
+        map_data = []
+        
+        for spot_name, spot_info in SD_SURF_SPOTS.items():
+            combined_data = spots_data.get(spot_name)
+            
+            # Calculate surf score
+            surf_score = self.calculate_surf_score(combined_data, user_prefs, spot_info)
+            
+            # Get current conditions
+            if combined_data and 'hourly' in combined_data:
+                wave_height = combined_data['hourly'].get('wave_height', [0])[0] or 0
+                wind_speed = combined_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                period = combined_data['hourly'].get('wave_period', [0])[0] or 0
+            else:
+                wave_height = wind_speed = period = 0
+            
+            # Color based on surf score
+            if surf_score >= 80:
+                color = '#00ff00'  # Green
+                icon = '🟢'
+            elif surf_score >= 60:
+                color = '#ffff00'  # Yellow
+                icon = '🟡'
+            elif surf_score >= 40:
+                color = '#ff8800'  # Orange
+                icon = '🟠'
+            else:
+                color = '#ff0000'  # Red
+                icon = '🔴'
+            
+            map_data.append({
+                'spot': spot_name,
+                'lat': spot_info['lat'],
+                'lon': spot_info['lon'],
+                'surf_score': surf_score,
+                'wave_height': wave_height,
+                'wind_speed': wind_speed,
+                'period': period,
+                'break_type': spot_info['break_type'],
+                'skill_level': spot_info['skill_level'],
+                'description': spot_info['description'],
+                'color': color,
+                'icon': icon,
+                'crowd_factor': spot_info['crowd_factor'],
+                'parking': spot_info['parking'],
+                'hazards': ', '.join(spot_info['hazards'])
+            })
+        
+        df = pd.DataFrame(map_data)
+        
+        # Create the map
+        fig = px.scatter_mapbox(
+            df,
+            lat='lat',
+            lon='lon',
+            color='surf_score',
+            size='wave_height',
+            hover_name='spot',
+            hover_data={
+                'surf_score': ':.0f',
+                'wave_height': ':.1f',
+                'wind_speed': ':.0f',
+                'period': ':.0f',
+                'break_type': True,
+                'skill_level': True,
+                'crowd_factor': True,
+                'parking': True,
+                'lat': False,
+                'lon': False
+            },
+            color_continuous_scale='RdYlGn',
+            size_max=25,
+            zoom=9,
+            center={'lat': 32.85, 'lon': -117.27},
+            mapbox_style='open-street-map',
+            title='San Diego Surf Spots - Live Conditions'
+        )
+        
+        fig.update_layout(
+            height=600,
+            margin={"r":0,"t":40,"l":0,"b":0}
+        )
+        
+        return fig, df
+    
+    def create_wave_forecast_chart(self, spots_data, selected_spots):
+        """Create multi-line wave forecast chart"""
+        fig = go.Figure()
+        
+        colors = px.colors.qualitative.Set3
+        
+        for i, spot_name in enumerate(selected_spots):
+            combined_data = spots_data.get(spot_name)
+            if combined_data and 'hourly' in combined_data:
+                times = combined_data['hourly'].get('time', [])[:48]  # 48 hours
+                wave_heights = combined_data['hourly'].get('wave_height', [])[:48]
+                
+                if times and wave_heights:
+                    times = [datetime.fromisoformat(t.replace('T', ' ')) for t in times]
+                    
+                    fig.add_trace(go.Scatter(
+                        x=times,
+                        y=wave_heights,
+                        mode='lines+markers',
+                        name=spot_name,
+                        line=dict(color=colors[i % len(colors)], width=3),
+                        marker=dict(size=6),
+                        hovertemplate=f'<b>{spot_name}</b><br>' +
+                                    'Time: %{x}<br>' +
+                                    'Wave Height: %{y:.1f} ft<extra></extra>'
+                    ))
+        
+        fig.update_layout(
+            title='48-Hour Wave Height Forecast',
+            xaxis_title='Time',
+            yaxis_title='Wave Height (ft)',
+            height=400,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        return fig
+    
+    def create_wind_wave_radar(self, combined_data, spot_name):
+        """Create radar chart showing wind and wave conditions"""
+        if not combined_data or 'hourly' not in combined_data:
+            return None
+        
+        # Get current conditions
+        wave_height = combined_data['hourly'].get('wave_height', [0])[0] or 0
+        wind_speed = combined_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+        period = combined_data['hourly'].get('wave_period', [0])[0] or 0
+        swell_height = combined_data['hourly'].get('swell_wave_height', [0])[0] or 0
+        
+        # Normalize values to 0-10 scale for radar
+        categories = ['Wave Height', 'Wind Speed', 'Wave Period', 'Swell Height', 'Overall Score']
+        
+        values = [
+            min(wave_height * 2, 10),  # Max 5ft = 10
+            max(0, 10 - wind_speed * 0.5),  # Lower wind = higher score
+            min(period * 0.8, 10),  # Max 12s = 10
+            min(swell_height * 2, 10),  # Max 5ft = 10
+            8  # Placeholder overall
+        ]
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            name=spot_name,
+            line_color='rgb(32, 156, 238)',
+            fillcolor='rgba(32, 156, 238, 0.3)'
+        ))
+        
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 10]
+                )),
+            showlegend=True,
+            title=f'{spot_name} - Surf Conditions Radar',
+            height=400
+        )
+        
+        return fig
+    
+    def create_tide_overlay_chart(self, tide_data, combined_data):
+        """Create tide chart with wave height overlay"""
+        if not tide_data or 'predictions' not in tide_data:
+            return None
+        
+        # Process tide data
+        tide_times = []
+        tide_heights = []
+        
+        for p in tide_data['predictions']:
+            try:
+                tide_times.append(datetime.strptime(p['t'], '%Y-%m-%d %H:%M'))
+                tide_heights.append(float(p['v']))
+            except (ValueError, KeyError):
+                continue
+        
+        if not tide_times:
+            return None
+        
+        # Create subplot with secondary y-axis
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # Add tide data
+        fig.add_trace(
+            go.Scatter(
+                x=tide_times,
+                y=tide_heights,
+                mode='lines',
+                name='Tide Height',
+                line=dict(color='lightblue', width=3),
+                fill='tonexty'
+            ),
+            secondary_y=False,
+        )
+        
+        # Add wave height if available
+        if combined_data and 'hourly' in combined_data:
+            wave_times = combined_data['hourly'].get('time', [])[:48]
+            wave_heights = combined_data['hourly'].get('wave_height', [])[:48]
+            
+            if wave_times and wave_heights:
+                wave_times = [datetime.fromisoformat(t.replace('T', ' ')) for t in wave_times]
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=wave_times,
+                        y=wave_heights,
+                        mode='lines+markers',
+                        name='Wave Height',
+                        line=dict(color='darkblue', width=2),
+                        marker=dict(size=4)
+                    ),
+                    secondary_y=True,
+                )
+        
+        # Update axes
+        fig.update_xaxes(title_text="Time")
+        fig.update_yaxes(title_text="Tide Height (ft)", secondary_y=False)
+        fig.update_yaxes(title_text="Wave Height (ft)", secondary_y=True)
+        
+        fig.update_layout(
+            title="Tide & Wave Correlation",
+            height=400,
+            hovermode='x unified'
+        )
+        
+        return fig
+    
+    def create_surf_quality_heatmap(self, spots_data, user_prefs):
+        """Create animated heatmap of surf quality over time"""
+        if not spots_data:
+            return None
+        
+        # Prepare data
+        spot_names = list(spots_data.keys())
+        hours = list(range(24))  # 24 hours
+        
+        quality_matrix = []
+        
+        for spot_name in spot_names:
+            combined_data = spots_data.get(spot_name)
+            spot_info = SD_SURF_SPOTS.get(spot_name, {})
+            hourly_scores = []
+            
+            if combined_data and 'hourly' in combined_data:
+                for hour in range(24):
+                    # Create temporary data for this hour
+                    temp_data = {'hourly': {}}
+                    for key, values in combined_data['hourly'].items():
+                        if len(values) > hour:
+                            temp_data['hourly'][key] = [values[hour]]
+                        else:
+                            temp_data['hourly'][key] = [0]
+                    
+                    score = self.calculate_surf_score(temp_data, user_prefs, spot_info)
+                    hourly_scores.append(score)
+            else:
+                hourly_scores = [0] * 24
+            
+            quality_matrix.append(hourly_scores)
+        
+        # Create heatmap
+        fig = go.Figure(data=go.Heatmap(
+                z=quality_matrix,
+                x=[f"{h:02d}:00" for h in hours],
+                y=spot_names,
+                colorscale='RdYlGn',
+                zmid=50,
+                colorbar=dict(title="Surf Score")
+        ))
+        
+        fig.update_layout(
+            title='24-Hour Surf Quality Forecast',
+            xaxis_title="Hour of Day",
+            yaxis_title="Surf Spots",
+            height=400
+        )
+        
+        return fig
+    
+    def recommend_surf_spots(self, user_prefs, spots_data):
+        """Enhanced recommendation system"""
+        recommendations = []
+        
+        for spot_name, spot_info in SD_SURF_SPOTS.items():
+            combined_data = spots_data.get(spot_name)
+            
+            # Calculate base surf score
+            surf_score = self.calculate_surf_score(combined_data, user_prefs, spot_info)
+            
+            # Preference matching bonuses (separate from surf score)
+            bonus_points = 0
+            
+            # Break type match
+            break_match = (user_prefs['break_type'] == 'Any' or 
+                          spot_info['break_type'] == user_prefs['break_type'])
+            if break_match:
+                bonus_points += 10
+            
+            # Board type match
+            board_match = (user_prefs['board_length'] in spot_info['ideal_boards'])
+            if board_match:
+                bonus_points += 10
+            
+            # Skill level match
+            skill_match = (user_prefs['skill_level'] == spot_info['skill_level'])
+            if skill_match:
+                bonus_points += 15
+            
+            # Calculate final recommendation score (max 135: 100 surf + 35 bonus)
+            final_score = surf_score + bonus_points
+            
+            recommendations.append({
+                'spot': spot_name,
+                'score': final_score,
+                'surf_score': surf_score,
+                'bonus_points': bonus_points,
+                'break_type': spot_info['break_type'],
+                'skill_level': spot_info['skill_level'],
+                'description': spot_info['description'],
+                'break_match': break_match,
+                'board_match': board_match,
+                'skill_match': skill_match,
+                'crowd_factor': spot_info['crowd_factor'],
+                'parking': spot_info['parking'],
+                'hazards': spot_info['hazards']
+            })
+        
+        return sorted(recommendations, key=lambda x: x['score'], reverse=True)
+    
+    def create_dashboard(self):
+        """Create the enhanced Streamlit dashboard"""
+        # Custom CSS for better styling
+        st.markdown("""
+        <style>
+        .main-header {
+            font-size: 3rem;
+            background: linear-gradient(90deg, #1e3c72, #2a5298);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1rem;
+            border-radius: 10px;
+            color: white;
+            margin: 0.5rem 0;
+        }
+        .recommendation-card {
+            border-left: 5px solid #00ff00;
+            padding: 1rem;
+            margin: 1rem 0;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<h1 class="main-header">🏄‍♂️ San Diego Surf Dashboard</h1>', unsafe_allow_html=True)
+        st.markdown("**Real-time surf forecasts with AI-powered recommendations and interactive visualizations**")
+        
+        # Sidebar
+        with st.sidebar:
+            st.header("🎯 Surf Preferences")
+            
+            skill_level = st.selectbox(
+                "Skill Level",
+                ['Low', 'Medium', 'High'],
+                index=1,
+                help="Your surfing experience level"
+            )
+            
+            board_length = st.selectbox(
+                "Preferred Board",
+                ['Longboard', 'Funboard', 'Shortboard', 'SUP', 'Gun'],
+                index=1,
+                help="Your preferred board type"
+            )
+            
+            break_type = st.selectbox(
+                "Preferred Break Type",
+                ['Any', 'Beach Break', 'Point Break', 'Reef Break'],
+                index=0,
+                help="Type of wave break you prefer"
+            )
+            
+            user_prefs = {
+                'skill_level': skill_level,
+                'board_length': board_length,
+                'break_type': break_type
+            }
+            
+            st.divider()
+            
+            st.header("⚙️ Controls")
+            selected_spots = st.multiselect(
+                "Select Surf Spots",
+                list(SD_SURF_SPOTS.keys()),
+                default=list(SD_SURF_SPOTS.keys())[:6],
+                help="Choose which spots to analyze"
+            )
+            
+            auto_refresh = st.checkbox("🔄 Auto-refresh (5 min)", value=False)
+            refresh_button = st.button("🔄 Refresh All Data", type="primary")
+            
+            # Quick stats in sidebar
+            if 'surf_data' in st.session_state:
+                st.divider()
+                st.subheader("📊 Quick Stats")
+                
+                # Calculate average conditions
+                avg_wave_height = 0
+                avg_wind_speed = 0
+                valid_spots = 0
+                
+                for spot_data in st.session_state.surf_data.values():
+                    if spot_data and 'hourly' in spot_data:
+                        wave_h = spot_data['hourly'].get('wave_height', [0])[0] or 0
+                        wind_s = spot_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                        avg_wave_height += wave_h
+                        avg_wind_speed += wind_s
+                        valid_spots += 1
+                
+                if valid_spots > 0:
+                    avg_wave_height /= valid_spots
+                    avg_wind_speed /= valid_spots
+                    
+                    st.metric("Avg Wave Height", f"{avg_wave_height:.1f} ft")
+                    st.metric("Avg Wind Speed", f"{avg_wind_speed:.0f} mph")
+        
+        # Data fetching
+        if refresh_button or auto_refresh or 'surf_data' not in st.session_state:
+            with st.spinner("🌊 Fetching comprehensive surf data..."):
+                spots_data = {}
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, spot_name in enumerate(selected_spots):
+                    status_text.text(f"Loading {spot_name}...")
+                    spot_info = SD_SURF_SPOTS[spot_name]
+                    
+                    marine_data = self.get_marine_data(spot_info['lat'], spot_info['lon'])
+                    weather_data = self.get_weather_data(spot_info['lat'], spot_info['lon'])
+                    
+                    combined_data = self.combine_marine_weather_data(marine_data, weather_data)
+                    spots_data[spot_name] = combined_data
+                    
+                    progress_bar.progress((i + 1) / len(selected_spots))
+                
+                st.session_state.surf_data = spots_data
+                progress_bar.empty()
+                status_text.empty()
+        
+        if 'surf_data' in st.session_state:
+            spots_data = st.session_state.surf_data
+            
+            # Main dashboard tabs
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "🗺️ Interactive Map", 
+                "🎯 Recommendations", 
+                "📊 Analytics", 
+                "🌊 Forecasts", 
+                "📈 Advanced"
+            ])
+            
+            with tab1:
+                st.subheader("🗺️ Interactive Surf Conditions Map")
+                
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    map_fig, map_df = self.create_interactive_map(spots_data, user_prefs)
+                    st.plotly_chart(map_fig, use_container_width=True)
+                
+                with col2:
+                    st.subheader("Map Legend")
+                    st.markdown("""
+                    **Surf Score Colors:**
+                    - 🟢 **80-100**: Excellent
+                    - 🟡 **60-79**: Good  
+                    - 🟠 **40-59**: Fair
+                    - 🔴 **0-39**: Poor
+                    
+                    **Bubble Size** = Wave Height
+                    
+                    *Click markers for details*
+                    """)
+                    
+                    # Top 3 spots summary
+                    if not map_df.empty:
+                        st.subheader("🏆 Top Spots Right Now")
+                        top_spots = map_df.nlargest(3, 'surf_score')
+                        
+                        for idx, spot in top_spots.iterrows():
+                            st.markdown(f"""
+                            **{spot['icon']} {spot['spot']}**  
+                            Score: {spot['surf_score']:.0f}/100  
+                            Waves: {spot['wave_height']:.1f}ft  
+                            Wind: {spot['wind_speed']:.0f}mph
+                            """)
+            
+            with tab2:
+                st.subheader("🎯 AI-Powered Surf Recommendations")
+                
+                recommendations = self.recommend_surf_spots(user_prefs, spots_data)
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    for i, rec in enumerate(recommendations[:5]):
+                        # Color-coded recommendation cards
+                        if rec['score'] >= 100:
+                            border_color = "#00ff00"
+                            score_emoji = "🟢"
+                        elif rec['score'] >= 80:
+                            border_color = "#ffff00" 
+                            score_emoji = "🟡"
+                        elif rec['score'] >= 60:
+                            border_color = "#ff8800"
+                            score_emoji = "🟠"
+                        else:
+                            border_color = "#ff0000"
+                            score_emoji = "🔴"
+                        
+                        with st.container():
+                            st.markdown(f"""
+                            <div style="border-left: 5px solid {border_color}; padding: 15px; margin: 10px 0; background: #f8f9fa; border-radius: 5px;">
+                            <h4>{score_emoji} #{i+1}: {rec['spot']}</h4>
+                            <p><strong>Total Score:</strong> {rec['score']:.0f}/135 (Surf: {rec['surf_score']:.0f}/100 + Bonus: {rec['bonus_points']}/35)</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Expandable details
+                            with st.expander(f"📋 Details for {rec['spot']}", expanded=i==0):
+                                col_a, col_b, col_c = st.columns(3)
+                                
+                                with col_a:
+                                    st.write(f"**Break Type:** {rec['break_type']}")
+                                    st.write(f"**Skill Level:** {rec['skill_level']}")
+                                    st.write(f"**Crowd Factor:** {rec['crowd_factor']}/10")
+                                
+                                with col_b:
+                                    st.write(f"**Break Match:** {'✅' if rec['break_match'] else '❌'}")
+                                    st.write(f"**Board Match:** {'✅' if rec['board_match'] else '❌'}")
+                                    st.write(f"**Skill Match:** {'✅' if rec['skill_match'] else '❌'}")
+                                
+                                with col_c:
+                                    st.write(f"**Parking:** {rec['parking']}")
+                                    st.write(f"**Hazards:** {', '.join(rec['hazards'])}")
+                                
+                                st.write(f"*{rec['description']}*")
+                                
+                                # Current conditions for this spot
+                                spot_data = spots_data.get(rec['spot'])
+                                if spot_data and 'hourly' in spot_data:
+                                    wave_h = spot_data['hourly'].get('wave_height', [0])[0] or 0
+                                    wind_s = spot_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                                    period = spot_data['hourly'].get('wave_period', [0])[0] or 0
+                                    
+                                    st.markdown("**Current Conditions:**")
+                                    cond_col1, cond_col2, cond_col3 = st.columns(3)
+                                    with cond_col1:
+                                        st.metric("Wave Height", f"{wave_h:.1f} ft")
+                                    with cond_col2:
+                                        st.metric("Wind Speed", f"{wind_s:.0f} mph")
+                                    with cond_col3:
+                                        st.metric("Period", f"{period:.0f} sec")
+                
+                with col2:
+                    st.subheader("🎯 Your Preferences")
+                    st.info(f"""
+                    **Skill Level:** {skill_level}  
+                    **Board Type:** {board_length}  
+                    **Break Type:** {break_type}
+                    """)
+                    
+                    st.subheader("🏆 Best Match")
+                    if recommendations:
+                        best = recommendations[0]
+                        st.success(f"""
+                        **{best['spot']}**  
+                        Score: {best['score']:.0f}/135  
+                        
+                        Perfect for your:
+                        {'✅ Skill level' if best['skill_match'] else ''}  
+                        {'✅ Board type' if best['board_match'] else ''}  
+                        {'✅ Break preference' if best['break_match'] else ''}
+                        """)
+                    
+                    # Scoring explanation
+                    with st.expander("📖 How Scoring Works"):
+                        st.markdown("""
+                        **Surf Score (0-100):**
+                        - Wave Height: 40pts
+                        - Wind Conditions: 25pts  
+                        - Wave Period: 20pts
+                        - Spot Characteristics: 15pts
+                        
+                        **Bonus Points (0-35):**
+                        - Break Type Match: +10pts
+                        - Board Type Match: +10pts
+                        - Skill Level Match: +15pts
+                        """)
+            
+            with tab3:
+                st.subheader("📊 Advanced Surf Analytics")
+                
+                # Wave forecast chart
+                st.markdown("**48-Hour Wave Height Trends**")
+                wave_forecast = self.create_wave_forecast_chart(spots_data, selected_spots)
+                if wave_forecast:
+                    st.plotly_chart(wave_forecast, use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Surf quality heatmap
+                    st.markdown("**Surf Quality Over Time**")
+                    quality_heatmap = self.create_surf_quality_heatmap(spots_data, user_prefs)
+                    if quality_heatmap:
+                        st.plotly_chart(quality_heatmap, use_container_width=True)
+                    
+                with col2:
+                    # Radar chart for selected spot
+                    st.markdown("**Spot Conditions Radar**")
+                    radar_spot = st.selectbox("Select spot for radar:", selected_spots, key="radar_spot")
+                    
+                    if radar_spot and spots_data.get(radar_spot):
+                        radar_fig = self.create_wind_wave_radar(spots_data[radar_spot], radar_spot)
+                        if radar_fig:
+                            st.plotly_chart(radar_fig, use_container_width=True)
+            
+            with tab4:
+                st.subheader("🌊 Detailed Forecasts")
+                
+                # Tide analysis
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Tide Correlations**")
+                    tide_spot = st.selectbox("Select spot for tide data:", selected_spots, key="tide_spot")
+                    
+                    if tide_spot:
+                        spot_info = SD_SURF_SPOTS[tide_spot]
+                        tide_data = self.get_tide_data(spot_info['tide_station'])
+                        combined_data = spots_data.get(tide_spot)
+                        
+                        tide_chart = self.create_tide_overlay_chart(tide_data, combined_data)
+                        if tide_chart:
+                            st.plotly_chart(tide_chart, use_container_width=True)
+                        else:
+                            st.warning("Tide data temporarily unavailable")
+                
+                with col2:
+                    st.markdown("**Wind Analysis**")
+                    wind_spot = st.selectbox("Select spot for wind analysis:", selected_spots, key="wind_spot")
+                    
+                    if wind_spot and spots_data.get(wind_spot):
+                        wind_data = spots_data[wind_spot]
+                        
+                        if wind_data and 'hourly' in wind_data:
+                            # Wind rose diagram
+                            wind_dirs = wind_data['hourly'].get('wind_direction_10m', [])[:24]
+                            wind_speeds = wind_data['hourly'].get('wind_speed_10m', [])[:24]
+                            
+                            if wind_dirs and wind_speeds:
+                                # Filter valid data
+                                valid_data = [(d, s) for d, s in zip(wind_dirs, wind_speeds) 
+                                            if d is not None and s is not None]
+                                
+                                if valid_data:
+                                    directions, speeds = zip(*valid_data)
+                                    
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatterpolar(
+                                        r=speeds,
+                                        theta=directions,
+                                        mode='markers',
+                                        marker=dict(
+                                            color=speeds,
+                                            colorscale='Viridis',
+                                            size=8,
+                                            colorbar=dict(title="Wind Speed (mph)")
+                                        ),
+                                        name='Wind Data'
+                                    ))
+                                    
+                                    fig.update_layout(
+                                        polar=dict(
+                                            radialaxis=dict(visible=True, range=[0, max(speeds) + 5]),
+                                            angularaxis=dict(
+                                                tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+                                                ticktext=['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+                                            )
+                                        ),
+                                        title=f"Wind Rose - {wind_spot}",
+                                        height=400
+                                    )
+                                    
+                                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Current conditions summary table
+                st.markdown("**Current Conditions Summary**")
+                
+                conditions_data = []
+                for spot_name in selected_spots:
+                    combined_data = spots_data.get(spot_name)
+                    if combined_data and 'hourly' in combined_data:
+                        wave_h = combined_data['hourly'].get('wave_height', [0])[0] or 0
+                        wind_s = combined_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                        wind_d = combined_data['hourly'].get('wind_direction_10m', [0])[0] or 0
+                        period = combined_data['hourly'].get('wave_period', [0])[0] or 0
+                        temp = combined_data['hourly'].get('temperature_2m', [0])[0] or 0
+                        
+                        surf_score = self.calculate_surf_score(combined_data, user_prefs, SD_SURF_SPOTS[spot_name])
+                        
+                        conditions_data.append({
+                            'Spot': spot_name,
+                            'Score': f"{surf_score:.0f}/100",
+                            'Wave Height': f"{wave_h:.1f} ft",
+                            'Period': f"{period:.0f} sec",
+                            'Wind': f"{wind_s:.0f} mph @ {wind_d:.0f}°",
+                            'Temp': f"{temp:.0f}°F" if temp > 0 else "N/A"
+                        })
+                
+                if conditions_data:
+                    conditions_df = pd.DataFrame(conditions_data)
+                    st.dataframe(conditions_df, use_container_width=True)
+            
+            with tab5:
+                st.subheader("📈 Advanced Analytics & Insights")
+                
+                # Performance metrics
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown("**📊 Session Analytics**")
+                    
+                    # Calculate some advanced metrics
+                    total_spots = len(selected_spots)
+                    excellent_spots = len([r for r in recommendations if r['score'] >= 100])
+                    good_spots = len([r for r in recommendations if 80 <= r['score'] < 100])
+                    
+                    st.metric("Spots Analyzed", total_spots)
+                    st.metric("Excellent Conditions", excellent_spots)
+                    st.metric("Good Conditions", good_spots)
+                    
+                    # Recommendation confidence
+                    if recommendations:
+                        top_score = recommendations[0]['score']
+                        confidence = min(top_score / 100 * 100, 100)
+                        st.metric("Recommendation Confidence", f"{confidence:.0f}%")
+                
+                with col2:
+                    st.markdown("**🌊 Wave Statistics**")
+                    
+                    all_wave_heights = []
+                    all_periods = []
+                    
+                    for spot_data in spots_data.values():
+                        if spot_data and 'hourly' in spot_data:
+                            wave_h = spot_data['hourly'].get('wave_height', [0])[0] or 0
+                            period = spot_data['hourly'].get('wave_period', [0])[0] or 0
+                            if wave_h > 0:
+                                all_wave_heights.append(wave_h)
+                            if period > 0:
+                                all_periods.append(period)
+                    
+                    if all_wave_heights:
+                        st.metric("Avg Wave Height", f"{np.mean(all_wave_heights):.1f} ft")
+                        st.metric("Max Wave Height", f"{np.max(all_wave_heights):.1f} ft")
+                    
+                    if all_periods:
+                        st.metric("Avg Period", f"{np.mean(all_periods):.0f} sec")
+                
+                with col3:
+                    st.markdown("**💨 Wind Statistics**")
+                    
+                    all_wind_speeds = []
+                    for spot_data in spots_data.values():
+                        if spot_data and 'hourly' in spot_data:
+                            wind_s = spot_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                            if wind_s > 0:
+                                all_wind_speeds.append(wind_s)
+                    
+                    if all_wind_speeds:
+                        st.metric("Avg Wind Speed", f"{np.mean(all_wind_speeds):.0f} mph")
+                        st.metric("Max Wind Speed", f"{np.max(all_wind_speeds):.0f} mph")
+                        
+                        # Wind quality assessment
+                        avg_wind = np.mean(all_wind_speeds)
+                        if avg_wind < 10:
+                            wind_quality = "🟢 Excellent"
+                        elif avg_wind < 15:
+                            wind_quality = "🟡 Good"
+                        else:
+                            wind_quality = "🔴 Poor"
+                        st.metric("Wind Quality", wind_quality)
+                
+                # Advanced charts
+                st.markdown("**📈 Comparative Analysis**")
+                
+                # Create comparison charts
+                if len(selected_spots) >= 2:
+                    comparison_data = []
+                    
+                    for spot_name in selected_spots:
+                        combined_data = spots_data.get(spot_name)
+                        spot_info = SD_SURF_SPOTS[spot_name]
+                        
+                        if combined_data and 'hourly' in combined_data:
+                            wave_h = combined_data['hourly'].get('wave_height', [0])[0] or 0
+                            wind_s = combined_data['hourly'].get('wind_speed_10m', [0])[0] or 0
+                            period = combined_data['hourly'].get('wave_period', [0])[0] or 0
+                            surf_score = self.calculate_surf_score(combined_data, user_prefs, spot_info)
+                            
+                            comparison_data.append({
+                                'Spot': spot_name,
+                                'Wave Height': wave_h,
+                                'Wind Speed': wind_s,
+                                'Period': period,
+                                'Surf Score': surf_score,
+                                'Break Type': spot_info['break_type'],
+                                'Skill Level': spot_info['skill_level']
+                            })
+                    
+                    if comparison_data:
+                        comp_df = pd.DataFrame(comparison_data)
+                        
+                        # Scatter plot: Wave Height vs Surf Score
+                        fig = px.scatter(
+                            comp_df, 
+                            x='Wave Height', 
+                            y='Surf Score',
+                            size='Period',
+                            color='Break Type',
+                            hover_name='Spot',
+                            title='Wave Height vs Surf Score Correlation',
+                            labels={'Wave Height': 'Wave Height (ft)', 'Surf Score': 'Surf Score (0-100)'}
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+            
+            # Footer
+            st.divider()
+            st.markdown("""
+            **🔄 Last Updated:** {timestamp}  
+            **📡 Data Sources:** Open-Meteo Marine API, Open-Meteo Weather API, NOAA CO-OPS API  
+            **ℹ️ Note:** Surf scores are calculated based on wave height, wind conditions, wave period, and spot characteristics relative to your preferences.
+            """.format(timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S PST")))
+
+def main():
+    dashboard = EnhancedSurfDashboard()
+    dashboard.create_dashboard()
+
+if __name__ == "__main__":
+    main()
